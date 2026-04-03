@@ -154,11 +154,12 @@ app.get('/callback', async (req, res) => {
 
     console.log(`Utente autenticato: ${userinfo.preferred_username || userinfo.sub}`);
 
-    // Salvataggio esplicito della sessione prima del redirect
-    // (senza questo, il redirect parte prima che la sessione sia persistita)
+    // Salva in sessione (per accesso successivo via /profile)
     req.session.save((err) => {
       if (err) console.error('Errore salvataggio sessione:', err);
-      res.redirect(`${BASE_PATH}/profile`);
+      // Renderizza direttamente il profilo qui (evita problemi di sessione
+      // quando il validatore SPID apre un nuovo tab senza cookie)
+      renderProfile(res, userinfo, new Date().toISOString());
     });
   } catch (err) {
     console.error('Errore callback:', err);
@@ -233,14 +234,9 @@ app.get('/reset', (req, res) => {
   });
 });
 
-// Profilo utente - mostra tutti gli attributi SPID ricevuti
-app.get('/profile', (req, res) => {
-  if (!req.session.user) return res.redirect(`${BASE_PATH}/`);
-
-  const user = req.session.user;
-  const loginTime = req.session.loginTime;
-
-  // Mappa attributi SPID per nomi leggibili
+// Funzione helper per renderizzare il profilo utente
+// (usata sia da /callback che da /profile per evitare problemi di sessione cross-tab)
+function renderProfile(res, user, loginTime) {
   const spidAttributes = {
     'sub': 'ID Utente (sub)',
     'preferred_username': 'Username',
@@ -360,6 +356,12 @@ app.get('/profile', (req, res) => {
   </div>
 </body>
 </html>`);
+}
+
+// Profilo utente - mostra gli attributi SPID dalla sessione
+app.get('/profile', (req, res) => {
+  if (!req.session.user) return res.redirect(`${BASE_PATH}/`);
+  renderProfile(res, req.session.user, req.session.loginTime);
 });
 
 // API: user info JSON
