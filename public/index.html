@@ -23,6 +23,13 @@
     }
     .btn-spid:hover { background: #004c99; }
     .btn-spid svg { height: 28px; width: 28px; flex-shrink: 0; }
+    .btn-reset {
+      display: block; width: 100%; padding: 12px 24px; margin-top: 12px;
+      background: #dc2626; color: white; border: none; border-radius: 10px;
+      font-size: 0.9em; font-weight: 600; cursor: pointer; text-decoration: none;
+      text-align: center; transition: background 0.2s;
+    }
+    .btn-reset:hover { background: #b91c1c; }
     .info-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 16px; margin-top: 16px; text-align: left; }
     .info-box h3 { color: #1d4ed8; font-size: 0.9em; margin-bottom: 8px; }
     .info-box ul { color: #475569; font-size: 0.85em; padding-left: 20px; line-height: 1.7; }
@@ -59,6 +66,8 @@
         </svg>
         Entra con SPID
       </a>
+
+      <a href="reset" class="btn-reset" id="btn-reset">Reset sessione e Logout da Keycloak</a>
 
       <div class="info-box">
         <h3>Cosa viene testato:</h3>
@@ -102,9 +111,11 @@
       const APP_ID = pathMatch ? pathMatch[1] : '';
       const BASE_PATH = APP_ID ? `/apps/${APP_ID}` : '';
 
-      // Aggiorna link login con BASE_PATH
+      // Aggiorna link login e reset con BASE_PATH
       const btnLogin = document.getElementById('btn-login');
       btnLogin.href = BASE_PATH + '/login';
+      const btnReset = document.getElementById('btn-reset');
+      btnReset.href = BASE_PATH + '/reset';
 
       // Mostra eventuali errori dall'URL
       const params = new URLSearchParams(window.location.search);

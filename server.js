@@ -152,7 +152,13 @@ app.get('/callback', async (req, res) => {
     req.session.loginTime = new Date().toISOString();
 
     console.log(`Utente autenticato: ${userinfo.preferred_username || userinfo.sub}`);
-    res.redirect(`${BASE_PATH}/profile`);
+
+    // Salvataggio esplicito della sessione prima del redirect
+    // (senza questo, il redirect parte prima che la sessione sia persistita)
+    req.session.save((err) => {
+      if (err) console.error('Errore salvataggio sessione:', err);
+      res.redirect(`${BASE_PATH}/profile`);
+    });
   } catch (err) {
     console.error('Errore callback:', err);
     res.redirect(`${BASE_PATH}/error?msg=${encodeURIComponent(err.message)}`);
