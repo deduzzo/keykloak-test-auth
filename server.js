@@ -130,11 +130,13 @@ app.get('/callback', async (req, res) => {
     } catch (validationErr) {
       // Se la validazione state/nonce fallisce (tipico con SPID validator
       // che fa POST cross-site e i cookie di sessione non arrivano),
-      // riproviamo accettando lo state/nonce che arriva da Keycloak
-      console.warn('[SPID] Validazione OIDC fallita, retry con state dal redirect:', validationErr.message);
-      const relaxedChecks = {};
-      if (params.state) relaxedChecks.state = params.state;
-      tokenSet = await oidcClient.callback(`${APP_URL}/callback`, params, relaxedChecks);
+      // usiamo grant() per scambiare il code senza validazione OIDC strict
+      console.warn('[SPID] Validazione OIDC fallita, uso grant diretto:', validationErr.message);
+      tokenSet = await oidcClient.grant({
+        grant_type: 'authorization_code',
+        code: params.code,
+        redirect_uri: `${APP_URL}/callback`
+      });
     }
 
     // Ottieni info utente
