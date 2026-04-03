@@ -1,0 +1,14 @@
+{
+  "name": "spid-test-login",
+  "version": "1.0.0",
+  "description": "App di test autenticazione SPID per collaudo AGID - ASP Messina",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm install"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "openid-client": "^5.7.0"
+  }
+}
