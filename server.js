@@ -6,6 +6,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// metatadata url: 
 // Keycloak OIDC config
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL || 'https://login.asp.messina.it';
 const REALM = process.env.REALM || 'asp';
@@ -345,7 +346,7 @@ app.get('/profile', (req, res) => {
         <tr><td class="attr-key">Client ID</td><td class="attr-value">${CLIENT_ID}</td></tr>
         <tr><td class="attr-key">Protocollo</td><td class="attr-value">OpenID Connect (Authorization Code Flow)</td></tr>
         <tr><td class="attr-key">Entity ID (SAML SP)</td><td class="attr-value">${KEYCLOAK_URL}/realms/${REALM}</td></tr>
-        <tr><td class="attr-key">SPID Metadata</td><td class="attr-value"><a href="${KEYCLOAK_URL}/realms/${REALM}/spid/metadata" target="_blank">${KEYCLOAK_URL}/realms/${REALM}/spid/metadata</a></td></tr>
+        <tr><td class="attr-key">SPID Metadata</td><td class="attr-value"><a href="${KEYCLOAK_URL}/realms/${REALM}/spid-sp-metadata" target="_blank">${KEYCLOAK_URL}/realms/${REALM}/spid-sp-metadata</a></td></tr>
       </table>
     </div>
     <div class="actions">
