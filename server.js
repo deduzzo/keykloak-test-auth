@@ -120,6 +120,18 @@ app.get('/callback', async (req, res) => {
 
     const params = oidcClient.callbackParams(req);
 
+    // Keycloak restituisce error + error_description quando l'autenticazione SPID fallisce
+    // (es. utente annulla, credenziali errate, identità sospesa, consenso negato)
+    if (params.error) {
+      console.warn(`[SPID] Errore OIDC ricevuto: ${params.error} - ${params.error_description || 'nessuna descrizione'}`);
+      const errorParams = new URLSearchParams({
+        error: params.error,
+        error_description: params.error_description || '',
+        msg: params.error_description || params.error
+      });
+      return res.redirect(`${BASE_PATH}/error?${errorParams.toString()}`);
+    }
+
     // Build checks: include state/nonce solo se presenti in sessione
     const checks = {};
     if (req.session.nonce) checks.nonce = req.session.nonce;
@@ -167,9 +179,109 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// Error page - mostra errore con opzioni di recupero (reset/riprova/logout)
+// ============================================================
+// Mappa errori SPID AGID v1.4
+// Codici 19-25: anomalie utente (ricevuti dal SP via SAML StatusCode)
+// Codici 8-18: anomalie AuthnRequest (errori tecnici SP)
+// Codici 26-30: riuso identità pregresse
+// ============================================================
+const SPID_ERRORS = {
+  // --- Errori utente (19-25) ---
+  '19': {
+    title: 'Autenticazione non riuscita',
+    desc: 'Le credenziali inserite non sono corrette oppure il numero massimo di tentativi è stato superato. Si prega di riprovare o contattare il proprio Identity Provider SPID.',
+    icon: '&#128274;', color: '#dc2626', category: 'utente'
+  },
+  '20': {
+    title: 'Sessione scaduta',
+    desc: 'Il tempo a disposizione per completare l\'autenticazione è scaduto. Si prega di riprovare.',
+    icon: '&#9200;', color: '#d97706', category: 'utente'
+  },
+  '21': {
+    title: 'Consenso negato',
+    desc: 'L\'utente ha negato il consenso all\'invio dei dati al Service Provider. Per accedere al servizio è necessario acconsentire alla trasmissione degli attributi richiesti.',
+    icon: '&#128683;', color: '#d97706', category: 'utente'
+  },
+  '22': {
+    title: 'Identità sospesa o revocata',
+    desc: 'L\'identità digitale SPID risulta sospesa o revocata. Si prega di contattare il proprio Identity Provider per verificare lo stato della propria identità.',
+    icon: '&#9888;', color: '#dc2626', category: 'utente'
+  },
+  '23': {
+    title: 'Operazione annullata dall\'utente',
+    desc: 'L\'utente ha annullato l\'operazione di autenticazione. È possibile riprovare quando si desidera.',
+    icon: '&#10060;', color: '#6b7280', category: 'utente'
+  },
+  '25': {
+    title: 'Processo di autenticazione annullato',
+    desc: 'Il processo di autenticazione è stato annullato. Si prega di riprovare.',
+    icon: '&#10060;', color: '#6b7280', category: 'utente'
+  },
+  // --- Errori tecnici SP (8-18) ---
+  '8': { title: 'Errore nella richiesta di autenticazione', desc: 'La richiesta di autenticazione presenta delle anomalie. Si prega di riprovare.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '9': { title: 'Errore nella richiesta di autenticazione', desc: 'La richiesta di autenticazione presenta delle anomalie nel formato.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '11': { title: 'Errore nella richiesta di autenticazione', desc: 'Attributo obbligatorio mancante nella richiesta.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '12': { title: 'Errore nella richiesta di autenticazione', desc: 'Errore nel formato degli attributi della richiesta.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '13': { title: 'Errore nella richiesta di autenticazione', desc: 'Richiesta non conforme alle specifiche SAML.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '14': { title: 'Errore nella richiesta di autenticazione', desc: 'Binding della richiesta non supportato.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '15': { title: 'Errore nella richiesta di autenticazione', desc: 'Errore nella validazione della firma della richiesta.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '16': { title: 'Errore nella richiesta di autenticazione', desc: 'Richiesta troppo vecchia o con validità temporale non corretta.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '17': { title: 'Errore nella richiesta di autenticazione', desc: 'Il Service Provider non è registrato presso l\'Identity Provider.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  '18': { title: 'Errore nella richiesta di autenticazione', desc: 'Errore nel set di attributi richiesti dal Service Provider.', icon: '&#128295;', color: '#dc2626', category: 'tecnico' },
+  // --- Riuso identità pregresse (26-30) ---
+  '26': { title: 'Errore nel processo di riuso identità', desc: 'Errore nel processo di autenticazione con identità pregressa.', icon: '&#128295;', color: '#dc2626', category: 'riuso' },
+  '27': { title: 'Errore nel processo di riuso identità', desc: 'Errore nel processo di autenticazione con identità pregressa.', icon: '&#128295;', color: '#dc2626', category: 'riuso' },
+  '28': { title: 'Errore nel processo di riuso identità', desc: 'Errore nel processo di autenticazione con identità pregressa.', icon: '&#128295;', color: '#dc2626', category: 'riuso' },
+  '29': { title: 'Errore nel processo di riuso identità', desc: 'Errore nel processo di autenticazione con identità pregressa.', icon: '&#128295;', color: '#dc2626', category: 'riuso' },
+  '30': { title: 'Errore nel processo di riuso identità', desc: 'Errore nel processo di autenticazione con identità pregressa.', icon: '&#128295;', color: '#dc2626', category: 'riuso' }
+};
+
+// Rileva il codice errore SPID dal messaggio di errore o dalla descrizione
+function detectSpidError(msg, errorCode, errorDesc) {
+  const fullText = `${msg || ''} ${errorCode || ''} ${errorDesc || ''}`.toLowerCase();
+
+  // Pattern matching per codici errore SPID noti
+  // Il spid-keycloak-provider o l'IdP possono includere il numero nel StatusMessage
+  const codeMatch = fullText.match(/(?:errore|error|codice|code|nr|anomalia)\s*[:\s#]?\s*(\d{1,2})/);
+  if (codeMatch && SPID_ERRORS[codeMatch[1]]) {
+    return { code: codeMatch[1], ...SPID_ERRORS[codeMatch[1]] };
+  }
+
+  // Pattern matching per parole chiave
+  if (/authnfailed|autenticazione fallita|credenziali|authentication failed|wrong password/.test(fullText)) {
+    return { code: '19', ...SPID_ERRORS['19'] };
+  }
+  if (/timeout|scadut|session expired|tempo/.test(fullText)) {
+    return { code: '20', ...SPID_ERRORS['20'] };
+  }
+  if (/consent|consenso|denied|negat/.test(fullText)) {
+    return { code: '21', ...SPID_ERRORS['21'] };
+  }
+  if (/sospes|revocat|suspended|revoked|bloccat/.test(fullText)) {
+    return { code: '22', ...SPID_ERRORS['22'] };
+  }
+  if (/annullat|cancel|abort|interrott|user.cancel/.test(fullText)) {
+    return { code: '23', ...SPID_ERRORS['23'] };
+  }
+  if (/access_denied/.test(fullText)) {
+    return { code: '21', ...SPID_ERRORS['21'] };
+  }
+  if (/login_required|interaction_required/.test(fullText)) {
+    return { code: '20', ...SPID_ERRORS['20'] };
+  }
+
+  return null; // Errore generico, non SPID-specifico
+}
+
+// Error page - mostra errore SPID AGID v1.4 con opzioni di recupero
 app.get('/error', (req, res) => {
   const msg = req.query.msg || 'Errore sconosciuto';
+  const errorCode = req.query.error || '';
+  const errorDesc = req.query.error_description || '';
+  const sanitize = (s) => String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const spidError = detectSpidError(msg, errorCode, errorDesc);
+
   res.send(`<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -179,48 +291,94 @@ app.get('/error', (req, res) => {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Titillium Web', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; color: #1e293b; min-height: 100vh; }
-    .header { background: linear-gradient(135deg, #dc2626, #991b1b); color: white; padding: 25px 20px; text-align: center; }
+    .header { background: linear-gradient(135deg, ${spidError ? spidError.color : '#dc2626'}, #991b1b); color: white; padding: 25px 20px; text-align: center; }
     .header h1 { font-size: 1.3em; margin-bottom: 4px; }
-    .container { max-width: 550px; margin: 40px auto; padding: 0 20px; }
-    .error-box { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px; padding: 20px; margin-bottom: 25px; }
-    .error-box h2 { color: #991b1b; margin-bottom: 8px; font-size: 1.1em; }
-    .error-box p { color: #7f1d1d; font-size: 0.9em; word-break: break-word; }
-    .error-box code { background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 3px; font-size: 0.85em; }
-    .card { background: white; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 30px; margin-bottom: 20px; }
+    .container { max-width: 550px; margin: 30px auto; padding: 0 20px; }
+    .error-icon { text-align: center; font-size: 48px; margin: 10px 0; }
+    .error-title { text-align: center; font-size: 1.2em; font-weight: 700; margin-bottom: 6px; }
+    .error-badge { display: inline-block; background: ${spidError ? spidError.color : '#dc2626'}; color: #fff; font-size: 0.75em; font-weight: 700; padding: 2px 10px; border-radius: 12px; margin-bottom: 12px; }
+    .error-box { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; }
+    .error-box p { color: #7f1d1d; font-size: 0.95em; line-height: 1.5; }
+    .card { background: white; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 20px; }
     .card h3 { margin-bottom: 15px; color: #334155; font-size: 1em; }
-    .btn { display: block; width: 100%; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 1em; text-align: center; margin-bottom: 12px; transition: all 0.2s; }
+    .btn { display: block; width: 100%; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 1em; text-align: center; margin-bottom: 10px; transition: all 0.2s; }
     .btn:last-child { margin-bottom: 0; }
-    .btn-reset { background: #dc2626; color: white; }
-    .btn-reset:hover { background: #b91c1c; }
     .btn-retry { background: #0066cc; color: white; }
     .btn-retry:hover { background: #004999; }
+    .btn-reset { background: #dc2626; color: white; }
+    .btn-reset:hover { background: #b91c1c; }
     .btn-home { background: #64748b; color: white; }
     .btn-home:hover { background: #475569; }
-    .hint { margin-top: 20px; padding: 15px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 8px; font-size: 0.85em; color: #1e40af; }
+    .hint { margin-top: 16px; padding: 14px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 8px; font-size: 0.85em; color: #1e40af; line-height: 1.5; }
     .hint strong { display: block; margin-bottom: 4px; }
+    details { margin-bottom: 16px; }
+    summary { cursor: pointer; color: #64748b; font-size: 0.8em; font-weight: 600; }
+    .tech-detail { margin-top: 8px; padding: 10px; background: #f1f5f9; border-radius: 6px; font-size: 0.8em; color: #475569; word-break: break-word; font-family: monospace; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>ASP Messina - Errore Autenticazione</h1>
+    <h1>ASP Messina - Errore Autenticazione SPID</h1>
   </div>
   <div class="container">
-    <div class="error-box">
-      <h2>Errore durante l'autenticazione SPID</h2>
-      <p><code>${msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></p>
+    ${spidError ? `
+    <div class="error-icon">${spidError.icon}</div>
+    <div style="text-align:center;">
+      <div class="error-title" style="color:${spidError.color};">${sanitize(spidError.title)}</div>
+      <span class="error-badge">Codice errore SPID: ${sanitize(spidError.code)}</span>
     </div>
+    <div class="error-box">
+      <p>${sanitize(spidError.desc)}</p>
+    </div>
+    ` : `
+    <div class="error-icon">&#9888;</div>
+    <div style="text-align:center;">
+      <div class="error-title" style="color:#dc2626;">Errore durante l'autenticazione</div>
+    </div>
+    <div class="error-box">
+      <p>${sanitize(msg)}</p>
+    </div>
+    `}
+
+    <details>
+      <summary>Dettaglio tecnico</summary>
+      <div class="tech-detail">
+        ${errorCode ? `<div><strong>Error:</strong> ${sanitize(errorCode)}</div>` : ''}
+        ${errorDesc ? `<div><strong>Descrizione:</strong> ${sanitize(errorDesc)}</div>` : ''}
+        <div><strong>Messaggio:</strong> ${sanitize(msg)}</div>
+        <div><strong>Timestamp:</strong> ${new Date().toISOString()}</div>
+      </div>
+    </details>
+
     <div class="card">
       <h3>Cosa puoi fare:</h3>
-      <a href="${BASE_PATH}/reset" class="btn btn-reset">Reset sessione e Logout da Keycloak</a>
       <a href="${BASE_PATH}/login" class="btn btn-retry">Riprova autenticazione</a>
+      <a href="${BASE_PATH}/reset" class="btn btn-reset">Reset sessione e Logout</a>
       <a href="${BASE_PATH}/" class="btn btn-home">Torna alla Home</a>
     </div>
+
+    ${spidError && (spidError.code === '19' || spidError.code === '22') ? `
+    <div class="hint">
+      <strong>Assistenza SPID</strong>
+      Per problemi con le credenziali o lo stato dell'identità digitale,
+      contattare il proprio Identity Provider SPID o visitare
+      <a href="https://www.spid.gov.it/serve-aiuto" target="_blank">spid.gov.it/serve-aiuto</a>
+    </div>` : ''}
+
+    ${spidError && spidError.category === 'tecnico' ? `
+    <div class="hint">
+      <strong>Errore tecnico</strong>
+      Questo errore indica un problema nella configurazione del Service Provider.
+      Il team tecnico ASP Messina è stato notificato. Se il problema persiste,
+      contattare l'assistenza tecnica.
+    </div>` : ''}
+
+    ${!spidError ? `
     <div class="hint">
       <strong>Suggerimento</strong>
       Se l'errore riguarda "state" o "nonce", premi "Reset sessione" per pulire tutto
-      e poi riprova. Questo errore puo capitare durante i test con il validatore SPID AgID
-      a causa del POST cross-site che non preserva i cookie di sessione.
-    </div>
+      e poi riprova. Questo errore può capitare durante i test con il validatore SPID AgID.
+    </div>` : ''}
   </div>
 </body>
 </html>`);
