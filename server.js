@@ -571,6 +571,7 @@ function renderProfile(req, res, user, loginTime) {
       <a href="${BASE_PATH}/logout" class="btn btn-danger">Logout</a>
       <a href="${BASE_PATH}/" class="btn btn-outline">Torna alla Home</a>
       <a href="${BASE_PATH}/api/user" class="btn btn-outline" target="_blank">API JSON</a>
+      <a href="${BASE_PATH}/api/userinfo" class="btn btn-outline" target="_blank" style="background:#f59e0b;color:#000;border-color:#f59e0b;">Test Userinfo KC</a>
     </div>
   </div>
   <div class="footer">
@@ -584,6 +585,106 @@ function renderProfile(req, res, user, loginTime) {
 app.get('/profile', (req, res) => {
   if (!req.session.user) return res.redirect(`${BASE_PATH}/`);
   renderProfile(req, res, req.session.user, req.session.loginTime);
+});
+
+// API: test diretto userinfo endpoint Keycloak (simula la chiamata del client)
+app.get('/api/userinfo', async (req, res) => {
+  if (!req.session.tokenSet?.access_token) {
+    return res.status(401).json({ error: 'Non autenticato', login_url: `${BASE_PATH}/login` });
+  }
+
+  const userinfoUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/userinfo`;
+  const accessToken = req.session.tokenSet.access_token;
+
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(userinfoUrl, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    const rawBody = await response.text();
+
+    // Prova a parsare come JSON
+    let parsed = null;
+    let parseError = null;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch (e) {
+      parseError = e.message;
+    }
+
+    // Se è un JWT (application/jwt), decodifica il payload
+    let jwtDecoded = null;
+    if (contentType.includes('jwt') || (!parsed && rawBody.split('.').length === 3)) {
+      try {
+        const parts = rawBody.split('.');
+        jwtDecoded = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+      } catch (e) {
+        // non è un JWT valido
+      }
+    }
+
+    res.json({
+      endpoint: userinfoUrl,
+      httpStatus: response.status,
+      contentType: contentType,
+      rawBodyLength: rawBody.length,
+      rawBodyPreview: rawBody.substring(0, 500),
+      isJson: !!parsed,
+      isJwt: !!jwtDecoded,
+      parseError: parseError,
+      parsedJson: parsed,
+      jwtDecoded: jwtDecoded
+    });
+  } catch (err) {
+    // Fallback senza node-fetch: usa http nativo
+    const https = require('https');
+    const url = new URL(userinfoUrl);
+
+    const proxyReq = https.request({
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: url.pathname,
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      rejectUnauthorized: false
+    }, (proxyRes) => {
+      let data = '';
+      proxyRes.on('data', chunk => data += chunk);
+      proxyRes.on('end', () => {
+        const contentType = proxyRes.headers['content-type'] || '';
+        let parsed = null, parseError = null, jwtDecoded = null;
+
+        try { parsed = JSON.parse(data); } catch (e) { parseError = e.message; }
+
+        if (contentType.includes('jwt') || (!parsed && data.split('.').length === 3)) {
+          try {
+            const parts = data.split('.');
+            jwtDecoded = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+          } catch (e) {}
+        }
+
+        res.json({
+          endpoint: userinfoUrl,
+          httpStatus: proxyRes.statusCode,
+          contentType: contentType,
+          rawBodyLength: data.length,
+          rawBodyPreview: data.substring(0, 500),
+          isJson: !!parsed,
+          isJwt: !!jwtDecoded,
+          parseError: parseError,
+          parsedJson: parsed,
+          jwtDecoded: jwtDecoded
+        });
+      });
+    });
+
+    proxyReq.on('error', (e) => {
+      res.status(500).json({ error: 'Errore chiamata userinfo', details: e.message });
+    });
+    proxyReq.end();
+  }
 });
 
 // API: user info JSON
