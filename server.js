@@ -96,7 +96,7 @@ app.get('/login', (req, res) => {
   req.session.state = state;
 
   const params = {
-    scope: 'openid profile email',
+    scope: 'openid profile email spid-cie-attributes',
     nonce,
     state,
     redirect_uri: `${APP_URL}/callback`
@@ -152,10 +152,47 @@ app.get('/callback', async (req, res) => {
       });
     }
 
-    // Ottieni info utente
-    const userinfo = await oidcClient.userinfo(tokenSet.access_token);
+    console.log('[CALLBACK] Token ottenuto, claims:', JSON.stringify(tokenSet.claims(), null, 2));
 
-    req.session.user = userinfo;
+    // Decodifica ID token per debug
+    let idTokenDecoded = {};
+    if (tokenSet.id_token) {
+      try {
+        const parts = tokenSet.id_token.split('.');
+        idTokenDecoded = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        console.log('[CALLBACK] ID Token decoded:', JSON.stringify(idTokenDecoded, null, 2));
+      } catch (e) {
+        console.warn('[CALLBACK] Errore decode ID token:', e.message);
+      }
+    }
+
+    // Decodifica Access token per debug
+    let accessTokenDecoded = {};
+    if (tokenSet.access_token) {
+      try {
+        const parts = tokenSet.access_token.split('.');
+        accessTokenDecoded = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        console.log('[CALLBACK] Access Token decoded:', JSON.stringify(accessTokenDecoded, null, 2));
+      } catch (e) {
+        console.warn('[CALLBACK] Errore decode Access token:', e.message);
+      }
+    }
+
+    // Userinfo - con fallback se endpoint non risponde JSON valido
+    let userinfo = {};
+    try {
+      userinfo = await oidcClient.userinfo(tokenSet.access_token);
+      console.log('[CALLBACK] Userinfo:', JSON.stringify(userinfo, null, 2));
+    } catch (userinfoErr) {
+      console.error('[CALLBACK] Errore userinfo (fallback a token claims):', userinfoErr.message);
+      // Fallback: usiamo i claims dal token stesso
+      userinfo = tokenSet.claims() || idTokenDecoded;
+    }
+
+    // Merge tutti i dati: userinfo + claims ID token (per avere tutto)
+    const mergedUser = { ...idTokenDecoded, ...userinfo };
+
+    req.session.user = mergedUser;
     req.session.tokenSet = {
       access_token: tokenSet.access_token,
       id_token: tokenSet.id_token,
@@ -163,18 +200,21 @@ app.get('/callback', async (req, res) => {
       expires_at: tokenSet.expires_at
     };
     req.session.loginTime = new Date().toISOString();
+    req.session.debug = {
+      idTokenClaims: idTokenDecoded,
+      accessTokenClaims: accessTokenDecoded,
+      userinfo: userinfo
+    };
 
-    console.log(`Utente autenticato: ${userinfo.preferred_username || userinfo.sub}`);
+    console.log(`[CALLBACK] Utente autenticato: ${mergedUser.preferred_username || mergedUser.sub} (${Object.keys(mergedUser).length} attributi)`);
 
     // Salva in sessione (per accesso successivo via /profile)
     req.session.save((err) => {
       if (err) console.error('Errore salvataggio sessione:', err);
-      // Renderizza direttamente il profilo qui (evita problemi di sessione
-      // quando il validatore SPID apre un nuovo tab senza cookie)
-      renderProfile(res, userinfo, new Date().toISOString());
+      renderProfile(req, res, mergedUser, new Date().toISOString());
     });
   } catch (err) {
-    console.error('Errore callback:', err);
+    console.error('[CALLBACK] Errore completo:', err);
     res.redirect(`${BASE_PATH}/error?msg=${encodeURIComponent(err.message)}`);
   }
 });
@@ -394,7 +434,8 @@ app.get('/reset', (req, res) => {
 
 // Funzione helper per renderizzare il profilo utente
 // (usata sia da /callback che da /profile per evitare problemi di sessione cross-tab)
-function renderProfile(res, user, loginTime) {
+function renderProfile(req, res, user, loginTime) {
+  const debug = req.session?.debug || null;
   const spidAttributes = {
     'sub': 'ID Utente (sub)',
     'preferred_username': 'Username',
@@ -492,6 +533,29 @@ function renderProfile(res, user, loginTime) {
       </div>
       <div id="json-raw" class="json-content">${JSON.stringify(user, null, 2)}</div>
     </div>
+    ${debug ? `
+    <div class="card">
+      <div class="card-header">Debug Token - ID Token Claims</div>
+      <div class="json-toggle" onclick="document.getElementById('json-idtoken').classList.toggle('open'); this.textContent = document.getElementById('json-idtoken').classList.contains('open') ? '&#9650; Chiudi' : '&#9660; Mostra ID Token Claims';">
+        &#9660; Mostra ID Token Claims
+      </div>
+      <div id="json-idtoken" class="json-content">${JSON.stringify(debug.idTokenClaims, null, 2)}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Debug Token - Access Token Claims</div>
+      <div class="json-toggle" onclick="document.getElementById('json-accesstoken').classList.toggle('open'); this.textContent = document.getElementById('json-accesstoken').classList.contains('open') ? '&#9650; Chiudi' : '&#9660; Mostra Access Token Claims';">
+        &#9660; Mostra Access Token Claims
+      </div>
+      <div id="json-accesstoken" class="json-content">${JSON.stringify(debug.accessTokenClaims, null, 2)}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Debug Token - Userinfo Endpoint</div>
+      <div class="json-toggle" onclick="document.getElementById('json-userinfo').classList.toggle('open'); this.textContent = document.getElementById('json-userinfo').classList.contains('open') ? '&#9650; Chiudi' : '&#9660; Mostra Userinfo';">
+        &#9660; Mostra Userinfo
+      </div>
+      <div id="json-userinfo" class="json-content">${JSON.stringify(debug.userinfo, null, 2)}</div>
+    </div>
+    ` : ''}
     <div class="card">
       <div class="card-header">Dettagli Tecnici</div>
       <table>
@@ -519,7 +583,7 @@ function renderProfile(res, user, loginTime) {
 // Profilo utente - mostra gli attributi SPID dalla sessione
 app.get('/profile', (req, res) => {
   if (!req.session.user) return res.redirect(`${BASE_PATH}/`);
-  renderProfile(res, req.session.user, req.session.loginTime);
+  renderProfile(req, res, req.session.user, req.session.loginTime);
 });
 
 // API: user info JSON
