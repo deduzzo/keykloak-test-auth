@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SPID Test Login - ASP Messina</title>
+  <title>Test Login (SPID / CIE / LDAP) - ASP Messina</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Titillium Web', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; color: #1e293b; min-height: 100vh; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <div class="header">
-    <h1>ASP Messina <span class="badge">TEST SPID</span></h1>
-    <p>Applicazione demo per collaudo AGID</p>
+    <h1>ASP Messina <span class="badge">TEST AUTH</span></h1>
+    <p>Demo OIDC: SPID / CIE / LDAP via Keycloak</p>
   </div>
 
   <div class="container">
@@ -55,16 +55,18 @@
     <div class="card">
       <img src="https://cdn.jsdelivr.net/gh/italia/spid-sp-access-button@master/src/production/img/spid-agid-logo-lb.png"
            alt="SPID" class="spid-logo" onerror="this.style.display='none'">
-      <h2>Test Autenticazione SPID</h2>
-      <p>Questa applicazione demo permette di verificare il flusso di autenticazione SPID
-         tramite il Service Provider Keycloak di ASP Messina.<br>
-         Premi il pulsante per autenticarti con SPID.</p>
+      <h2>Test Autenticazione</h2>
+      <p>Verifica del flusso di login tramite il realm Keycloak <code>asp</code>:
+         SPID, CIE oppure utenti del dominio (LDAP).<br>
+         Premi <strong>Accedi</strong> per aprire la pagina di login Keycloak con tutti i metodi disponibili.
+         I dati restituiti dal token (claim, attributi mappati, userinfo) saranno mostrati alla pagina successiva,
+         utili per verificare i mapping configurati lato Keycloak.</p>
 
       <a href="login" class="btn-spid" id="btn-login">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" fill="white">
           <path d="M13 0C5.82 0 0 5.82 0 13s5.82 13 13 13 13-5.82 13-13S20.18 0 13 0zm0 4.55a3.9 3.9 0 110 7.8 3.9 3.9 0 010-7.8zM13 22.1a9.1 9.1 0 01-7.15-3.47c.04-2.37 4.77-3.67 7.15-3.67s7.11 1.3 7.15 3.67A9.1 9.1 0 0113 22.1z"/>
         </svg>
-        Entra con SPID
+        Accedi (SPID / CIE / LDAP)
       </a>
 
       <a href="reset" class="btn-reset" id="btn-reset">Reset sessione e Logout da Keycloak</a>
@@ -72,10 +74,11 @@
       <div class="info-box">
         <h3>Cosa viene testato:</h3>
         <ul>
-          <li>Flusso SAML 2.0 tra SP (Keycloak) e IdP SPID</li>
-          <li>Ricezione e visualizzazione attributi SPID</li>
+          <li>Login OIDC verso il realm Keycloak <code>asp</code></li>
+          <li>Federazione SAML SPID e CIE (via spid/cie-provider)</li>
+          <li>Autenticazione username/password contro l'User Federation LDAP</li>
+          <li>Ricezione e visualizzazione di tutti gli attributi/claim e dei mapping</li>
           <li>Conformita metadata SP alle regole tecniche AGID</li>
-          <li>Integrazione OIDC tra app e Keycloak</li>
         </ul>
       </div>
 
@@ -84,12 +87,12 @@
           <summary>Dettagli tecnici</summary>
           <div class="content">
             <strong>Architettura:</strong><br>
-            App (OIDC) &rarr; Keycloak (SAML SP) &rarr; IdP SPID<br><br>
+            App (OIDC) &rarr; Keycloak (SAML SP / LDAP UserStorage) &rarr; IdP SPID/CIE oppure LDAP<br><br>
             <strong>Entity ID:</strong> <code>https://login.asp.messina.it/realms/asp</code><br>
             <strong>SPID Metadata:</strong> <code>/realms/asp/spid-sp-metadata</code><br>
-            <strong>Client OIDC:</strong> <code>spid-test-login</code> (public)<br>
+            <strong>Client OIDC:</strong> <code>spid-test-login</code> (public, login_methods=password,spid,cie)<br>
             <strong>Protocollo App:</strong> OpenID Connect - Authorization Code Flow<br>
-            <strong>Piattaforma:</strong> Keycloak 26.x + spid-provider plugin
+            <strong>Piattaforma:</strong> Keycloak 26.x + spid-provider + cieid-provider + LDAP UserStorage
           </div>
         </details>
       </div>

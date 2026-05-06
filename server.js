@@ -86,7 +86,9 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// Login - redirect a Keycloak con SPID forzato
+// Login - redirect a Keycloak. Senza parametri mostra la pagina con TUTTI i metodi
+// abilitati (LDAP/password + SPID + CIE) in funzione di `login_methods` del client.
+// Con ?idp=... forza un IdP specifico (es. ?idp=spid-idp-posteid per il validator AGID).
 app.get('/login', (req, res) => {
   if (!oidcClient) return res.status(503).send('OIDC non inizializzato');
 
@@ -106,8 +108,8 @@ app.get('/login', (req, res) => {
   if (req.query.idp) {
     params.kc_idp_hint = req.query.idp;
   }
-  // Altrimenti Keycloak mostra la pagina di login con i metodi configurati
-  // (il tema legge l'attributo login_methods del client e mostra solo SPID)
+  // Altrimenti Keycloak mostra la pagina di login con tutti i metodi configurati
+  // nel client (`login_methods` 4o pipe della description).
 
   const authUrl = oidcClient.authorizationUrl(params);
   res.redirect(authUrl);
@@ -432,11 +434,93 @@ app.get('/reset', (req, res) => {
   });
 });
 
+// ============================================================
+// Rileva il metodo di autenticazione utilizzato analizzando i claim
+// del token. Distinguiamo tre canali: SPID, CIE, LDAP/password locale.
+//
+// Indizi disponibili:
+//  - claim `identity_provider` (Keycloak): presente quando il login
+//    e arrivato tramite Identity Provider brokerato (SPID/CIE).
+//    Es. "spid-poste", "cie-id", "spid-aruba", ...
+//  - claim SPID/CIE specifici: spidCode, fiscalNumber, idCard, ...
+//  - claim `amr` (RFC 8176): lista metodi di autenticazione, es. ["pwd"]
+//    per username/password. Su Keycloak compare quando l'utente ha
+//    fatto login direttamente (quindi LDAP o utente locale del realm).
+// ============================================================
+function detectLoginMethod(user, debug) {
+  const merged = { ...(debug?.idTokenClaims || {}), ...(debug?.accessTokenClaims || {}), ...(debug?.userinfo || {}), ...(user || {}) };
+
+  const idp = (merged.identity_provider || merged.idp || '').toString().toLowerCase();
+  const amr = Array.isArray(merged.amr) ? merged.amr.map(x => String(x).toLowerCase()) : [];
+  const issuer = (merged.iss || '').toString();
+
+  // 1) SPID/CIE via identity_provider broker
+  if (idp.includes('spid')) {
+    return {
+      kind: 'spid',
+      label: 'SPID',
+      idp,
+      icon: '&#127465;&#127481;', // bandiera IT
+      color: '#0066cc',
+      description: `Login federato via SPID Identity Provider: ${idp}`
+    };
+  }
+  if (idp.includes('cie')) {
+    return {
+      kind: 'cie',
+      label: 'CIE',
+      idp,
+      icon: '&#128274;',
+      color: '#004d99',
+      description: `Login federato via CIE (Carta d'Identita Elettronica): ${idp}`
+    };
+  }
+
+  // 2) Fallback su claim tipici SPID/CIE (alcune configurazioni non
+  // espongono identity_provider sul token finale ma mantengono gli attributi)
+  const spidLikeKeys = ['spidCode', 'spid_code', 'fiscalNumber', 'fiscal_number'];
+  const hasSpidAttrs = spidLikeKeys.some(k => merged[k] !== undefined && merged[k] !== null && merged[k] !== '');
+  if (hasSpidAttrs && (amr.length === 0 || amr.includes('saml') || amr.includes('ext'))) {
+    return {
+      kind: 'spid-cie-fallback',
+      label: 'SPID/CIE',
+      idp: idp || '(non specificato)',
+      icon: '&#127383;',
+      color: '#0066cc',
+      description: 'Login federato (rilevato dagli attributi SPID/CIE presenti nel token)'
+    };
+  }
+
+  // 3) LDAP / password locale (utente del realm autenticato direttamente)
+  if (amr.includes('pwd') || amr.includes('password')) {
+    return {
+      kind: 'ldap',
+      label: 'LDAP / Password',
+      idp: '(autenticazione diretta su realm Keycloak)',
+      icon: '&#128100;',
+      color: '#16a34a',
+      description: 'Login con username e password (utente locale del realm o utente LDAP federato)'
+    };
+  }
+
+  // 4) Sconosciuto: mostriamo comunque le info che abbiamo
+  return {
+    kind: 'unknown',
+    label: 'Metodo non determinato',
+    idp: idp || '(non disponibile)',
+    icon: '&#10067;',
+    color: '#64748b',
+    description: `Impossibile determinare il metodo dal token. amr=${JSON.stringify(amr)} iss=${issuer}`
+  };
+}
+
 // Funzione helper per renderizzare il profilo utente
 // (usata sia da /callback che da /profile per evitare problemi di sessione cross-tab)
 function renderProfile(req, res, user, loginTime) {
   const debug = req.session?.debug || null;
+  const method = detectLoginMethod(user, debug);
   const spidAttributes = {
+    // Standard OIDC
     'sub': 'ID Utente (sub)',
     'preferred_username': 'Username',
     'given_name': 'Nome',
@@ -444,6 +528,9 @@ function renderProfile(req, res, user, loginTime) {
     'name': 'Nome Completo',
     'email': 'Email',
     'email_verified': 'Email Verificata',
+    'locale': 'Lingua',
+    'updated_at': 'Aggiornato il',
+    // SPID / CIE
     'fiscal_number': 'Codice Fiscale',
     'fiscalNumber': 'Codice Fiscale',
     'date_of_birth': 'Data di Nascita',
@@ -455,7 +542,21 @@ function renderProfile(req, res, user, loginTime) {
     'mobilePhone': 'Telefono',
     'address': 'Indirizzo',
     'spid_code': 'Codice SPID',
-    'spidCode': 'Codice SPID'
+    'spidCode': 'Codice SPID',
+    'idCard': 'Documento di identita',
+    'expirationDate': 'Scadenza identita',
+    // LDAP / federazione utenti
+    'identity_provider': 'Identity Provider (broker)',
+    'amr': 'Authentication Methods (amr)',
+    'acr': 'Authentication Context Class (acr)',
+    'auth_time': 'Orario autenticazione',
+    'groups': 'Gruppi',
+    'realm_access': 'Ruoli realm',
+    'resource_access': 'Ruoli client',
+    'memberOf': 'Membro di (LDAP)',
+    'distinguishedName': 'DN LDAP',
+    'sAMAccountName': 'sAMAccountName (AD)',
+    'userPrincipalName': 'UPN (AD)'
   };
 
   const attributeRows = Object.entries(user).map(([key, value]) => {
@@ -474,7 +575,7 @@ function renderProfile(req, res, user, loginTime) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Profilo SPID - ASP Messina Test</title>
+  <title>Profilo Autenticazione - ASP Messina Test</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Titillium Web', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; color: #1e293b; }
@@ -514,19 +615,31 @@ function renderProfile(req, res, user, loginTime) {
 </head>
 <body>
   <div class="header">
-    <h1>ASP Messina - Test Autenticazione SPID <span class="badge badge-test">TEST</span></h1>
-    <p>Collaudo per certificazione AGID</p>
+    <h1>ASP Messina - Test Autenticazione <span class="badge badge-test">TEST</span></h1>
+    <p>SPID / CIE / LDAP via Keycloak OIDC</p>
   </div>
   <div class="container">
     <div class="success-banner">
       <div class="icon">&#9989;</div>
       <div class="text">
-        <h3>Autenticazione SPID completata con successo</h3>
+        <h3>Autenticazione completata con successo</h3>
         <p>Login effettuato il ${loginTime ? new Date(loginTime).toLocaleString('it-IT') : 'N/A'} tramite Keycloak OIDC</p>
       </div>
     </div>
+
+    <div class="card" style="border-left: 6px solid ${method.color};">
+      <div class="card-header" style="color:${method.color};">
+        ${method.icon} Metodo di autenticazione rilevato: <strong>${method.label}</strong>
+      </div>
+      <table>
+        <tr><td class="attr-key">Tipo</td><td class="attr-value"><code>${method.kind}</code></td></tr>
+        <tr><td class="attr-key">Identity Provider</td><td class="attr-value">${method.idp}</td></tr>
+        <tr><td class="attr-key">Descrizione</td><td class="attr-value">${method.description}</td></tr>
+      </table>
+    </div>
+
     <div class="card">
-      <div class="card-header">Attributi SPID ricevuti <span class="badge">${Object.keys(user).length} attributi</span></div>
+      <div class="card-header">Attributi ricevuti dal token <span class="badge">${Object.keys(user).length} attributi</span></div>
       <table>${attributeRows}</table>
       <div class="json-toggle" onclick="document.getElementById('json-raw').classList.toggle('open'); this.textContent = document.getElementById('json-raw').classList.contains('open') ? '&#9650; Chiudi JSON grezzo' : '&#9660; Mostra JSON grezzo';">
         &#9660; Mostra JSON grezzo
@@ -575,7 +688,7 @@ function renderProfile(req, res, user, loginTime) {
     </div>
   </div>
   <div class="footer">
-    ASP Messina &mdash; Test SPID per collaudo AGID | Client: ${CLIENT_ID}
+    ASP Messina &mdash; Test autenticazione SPID/CIE/LDAP | Client: ${CLIENT_ID}
   </div>
 </body>
 </html>`);
